@@ -167,21 +167,17 @@ if archivo_subido is not None:
         st.write("Configura el panel para construir gráficos en distintos formatos.")
 
         columnas_numericas = df.select_dtypes(include="number").columns.tolist()
-        columnas_categoricas = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
-
-        # Si no hay columnas categóricas, permitimos usar cualquier columna como eje.
-        if not columnas_categoricas:
-            columnas_categoricas = df.columns.tolist()
+        columnas_dimensiones = df.columns.tolist()
 
         control_1, control_2, control_3 = st.columns(3)
         with control_1:
             col_principal = st.selectbox(
                 "Dimensión principal:",
-                options=columnas_categoricas,
+                options=columnas_dimensiones,
                 key="col_principal"
             )
         with control_2:
-            opciones_desglose = ["-- Ninguno --"] + [c for c in columnas_categoricas if c != col_principal]
+            opciones_desglose = ["-- Ninguno --"] + [c for c in columnas_dimensiones if c != col_principal]
             col_desglose = st.selectbox(
                 "Desagregar por:",
                 options=opciones_desglose,
