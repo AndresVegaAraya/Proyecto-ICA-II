@@ -6,8 +6,20 @@ import uuid
 import copy
 import streamlit.components.v1 as components
 
+def _ajustar_contraste_blanco(obj):
+    if isinstance(obj, dict):
+        nuevo = {}
+        for clave, valor in obj.items():
+            nuevo[clave] = _ajustar_contraste_blanco(valor)
+        return nuevo
+    if isinstance(obj, list):
+        return [_ajustar_contraste_blanco(item) for item in obj]
+    if isinstance(obj, str) and obj.strip().upper() == "#FFFFFF":
+        return "#1F2937"
+    return obj
+
 def render_echarts(option, height=500, key_prefix="echart"):
-    option_render = copy.deepcopy(option)
+    option_render = _ajustar_contraste_blanco(copy.deepcopy(option))
     option_render.setdefault("toolbox", {
         "show": True,
         "right": 10,
@@ -17,7 +29,8 @@ def render_echarts(option, height=500, key_prefix="echart"):
                 "show": True,
                 "type": "png",
                 "name": "grafico_dashboard",
-                "pixelRatio": 2
+                "pixelRatio": 2,
+                "backgroundColor": "#FFFFFF"
             }
         }
     })
