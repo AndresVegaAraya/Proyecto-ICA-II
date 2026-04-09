@@ -220,6 +220,12 @@ if archivo_subido is not None:
         nivel_tiempo_col_sec = "Sin transformación"
         ordenar_cronologico = True
         filtros_categorias = {}
+        mostrar_numeros_torta = False
+        formato_numeros_torta = "Porcentaje"
+        posicion_etiqueta_torta = "Exterior"
+        mostrar_sugerencias_torta = True
+        agrupar_otros_torta = False
+        umbral_otros_torta = 3.0
 
         def es_columna_tiempo(serie):
             if pd.api.types.is_datetime64_any_dtype(serie):
@@ -349,6 +355,46 @@ if archivo_subido is not None:
             top_n = st.slider("Top N categorías:", min_value=3, max_value=30, value=10)
             mostrar_zoom = st.checkbox("Zoom interactivo", value=True)
             ordenar_cronologico = st.checkbox("Orden cronológico en campos de tiempo", value=True)
+
+            if tipo_grafico in ["Pie", "Dona"]:
+                st.markdown("##### Etiquetas en torta/dona")
+                mostrar_numeros_torta = st.checkbox(
+                    "Mostrar números en el gráfico",
+                    value=True,
+                    key="mostrar_numeros_torta"
+                )
+                if mostrar_numeros_torta:
+                    formato_numeros_torta = st.selectbox(
+                        "Formato de etiqueta:",
+                        options=["Porcentaje", "Valor", "Categoría + valor + %"],
+                        key="formato_numeros_torta"
+                    )
+                    posicion_etiqueta_torta = st.selectbox(
+                        "Posición de etiqueta:",
+                        options=["Exterior", "Interior"],
+                        key="posicion_etiqueta_torta"
+                    )
+                mostrar_sugerencias_torta = st.checkbox(
+                    "Mostrar sugerencias automáticas",
+                    value=True,
+                    key="mostrar_sugerencias_torta"
+                )
+
+                st.markdown("##### Agrupación automática")
+                agrupar_otros_torta = st.checkbox(
+                    "Agrupar categorías pequeñas en 'Otros'",
+                    value=False,
+                    key="agrupar_otros_torta"
+                )
+                if agrupar_otros_torta:
+                    umbral_otros_torta = st.slider(
+                        "Umbral mínimo por categoría (%):",
+                        min_value=1.0,
+                        max_value=15.0,
+                        value=3.0,
+                        step=0.5,
+                        key="umbral_otros_torta"
+                    )
 
             st.markdown("##### Categorización")
             columnas_filtro = st.multiselect(
@@ -562,13 +608,48 @@ if archivo_subido is not None:
                         categorias = [etiqueta_compuesta(v) for v in serie.index.tolist()]
                         valores = [round(float(v), 2) for v in serie.values.tolist()]
 
+                        categorias_agrupadas = 0
+                        if tipo_grafico in ["Pie", "Dona"] and agrupar_otros_torta and len(valores) > 1:
+                            total_previo = sum(valores)
+                            if total_previo > 0:
+                                categorias_filtradas = []
+                                valores_filtrados = []
+                                valor_otros = 0.0
+
+                                for cat, val in zip(categorias, valores):
+                                    pct = (val / total_previo) * 100
+                                    if pct < umbral_otros_torta:
+                                        valor_otros += val
+                                        categorias_agrupadas += 1
+                                    else:
+                                        categorias_filtradas.append(cat)
+                                        valores_filtrados.append(val)
+
+                                if 0 < categorias_agrupadas < len(categorias):
+                                    categorias = categorias_filtradas + ["Otros"]
+                                    valores = valores_filtrados + [round(valor_otros, 2)]
+                                else:
+                                    categorias_agrupadas = 0
+
                         m1, m2, m3 = st.columns(3)
                         m1.metric("Filas analizadas", f"{len(df_vis):,}")
                         m2.metric("Categorías", f"{len(categorias):,}")
                         m3.metric("Valor total", f"{sum(valores):,.2f}")
 
+                        if categorias_agrupadas > 0:
+                            st.caption(
+                                f"Se agruparon {categorias_agrupadas} categorías menores a {umbral_otros_torta:.1f}% en 'Otros'."
+                            )
+
                         if tipo_grafico in ["Pie", "Dona"]:
                             radio = ["40%", "70%"] if tipo_grafico == "Dona" else "65%"
+                            if formato_numeros_torta == "Valor":
+                                etiqueta_formato = "{c}"
+                            elif formato_numeros_torta == "Categoría + valor + %":
+                                etiqueta_formato = "{b}\n{c} ({d}%)"
+                            else:
+                                etiqueta_formato = "{d}%"
+
                             option = {
                                 "color": palette,
                                 "tooltip": {"trigger": "item", "backgroundColor": "rgba(0,0,0,0.8)", "textStyle": {"color": "#FFFFFF"}},
@@ -578,6 +659,13 @@ if archivo_subido is not None:
                                     "type": "pie",
                                     "radius": radio,
                                     "data": [{"value": v, "name": c} for c, v in zip(categorias, valores)],
+                                    "label": {
+                                        "show": mostrar_numeros_torta,
+                                        "position": "outside" if posicion_etiqueta_torta == "Exterior" else "inside",
+                                        "formatter": etiqueta_formato,
+                                        "color": "#FFFFFF"
+                                    },
+                                    "labelLine": {"show": mostrar_numeros_torta and posicion_etiqueta_torta == "Exterior"},
                                     "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowOffsetX": 0}}
                                 }]
                             }
@@ -600,6 +688,44 @@ if archivo_subido is not None:
                                 option["dataZoom"] = [{"type": "inside"}, {"type": "slider"}]
 
                         render_echarts(option=option, height=520, key_prefix="echart_simple")
+
+                        if tipo_grafico in ["Pie", "Dona"] and mostrar_sugerencias_torta:
+                            total_valor = sum(valores)
+                            sugerencias = []
+                            if total_valor > 0 and len(valores) > 0:
+                                idx_principal = int(np.argmax(valores))
+                                principal = categorias[idx_principal]
+                                peso_principal = (valores[idx_principal] / total_valor) * 100
+
+                                if peso_principal >= 60:
+                                    sugerencias.append(
+                                        f"La categoría '{principal}' concentra {peso_principal:.1f}% del total. Podría haber alta dependencia de un solo segmento."
+                                    )
+                                elif peso_principal >= 40:
+                                    sugerencias.append(
+                                        f"La categoría '{principal}' lidera con {peso_principal:.1f}% del total. Vale la pena monitorear su tendencia en el tiempo."
+                                    )
+                                else:
+                                    sugerencias.append(
+                                        "La distribución luce más equilibrada entre categorías."
+                                    )
+
+                                pequenas = sum(1 for v in valores if (v / total_valor) * 100 < 3)
+                                if pequenas >= 3:
+                                    sugerencias.append(
+                                        "Hay varias categorías pequeñas (<3%). Considera agruparlas como 'Otros' para mejorar legibilidad."
+                                    )
+
+                                if len(categorias) > 8:
+                                    sugerencias.append(
+                                        "Hay muchas categorías para un pie/dona. Para comunicar mejor, usa Top N o cambia a barras."
+                                    )
+
+                            if sugerencias:
+                                with st.expander("💡 Sugerencias automáticas"):
+                                    for sug in sugerencias:
+                                        st.write(f"- {sug}")
+
                         with st.expander("Ver tabla base del gráfico"):
                             nombre_dim = " + ".join(campos_filas)
                             st.dataframe(pd.DataFrame({nombre_dim: categorias, metrica: valores}), use_container_width=True)
