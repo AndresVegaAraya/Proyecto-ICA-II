@@ -9,6 +9,8 @@ import colorsys
 import re
 import urllib.parse
 import streamlit.components.v1 as components
+import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 
 # ── Constantes ────────────────────────────────────────────────────────────────
 NINGUNO = "-- Ninguno --"
@@ -141,8 +143,7 @@ def render_echarts(option, height=500, key_prefix="echart"):
   </script>
 </body>
 </html>"""
-    data_url = "data:text/html;charset=utf-8," + urllib.parse.quote(html)
-    st.iframe(data_url, height=height)
+    components.html(html, height=height)
 
 
 def _mermaid_id(label, prefix):
@@ -219,148 +220,134 @@ def _parse_causas(texto):
 
 
 def render_ishikawa_svg(problema, causas_por_categoria, height=620, width=1000):
+    """Renderiza diagrama de Ishikawa con estilo profesional basado en matplotlib."""
+    from matplotlib.patches import Polygon, Wedge
+    
     t = _tema()
-    fondo = t["fondo"]
-    texto = t["texto"]
-    linea = t["linea"]
-
+    
+    # Configurar figura
+    fig, ax = plt.subplots(figsize=(18, 8))
+    ax.set_xlim(-5, 8)
+    ax.set_ylim(-5, 5)
+    ax.axis('off')
+    
+    # Colores de tema
+    bg_color = t["fondo"]
+    fig.patch.set_facecolor(bg_color)
+    ax.set_facecolor(bg_color)
+    
+    # Color para las anotaciones
+    text_color_bbox = "#1f77b4"  # Azul para las cajas de categorías
+    arrow_color = "#000000" if t["texto"] == "#FFFFFF" else "#333333"
+    
+    # ── Función para dibujar categorías (problemas) ──
+    def draw_problem(data: str, problem_x: float, problem_y: float,
+                     angle_x: float, angle_y: float):
+        """Dibuja una categoría como una caja etiquetada."""
+        ax.annotate(str.upper(data), xy=(problem_x, problem_y),
+                   xytext=(angle_x, angle_y),
+                   fontsize=11, color='white', weight='bold',
+                   xycoords='data', va='center', ha='center',
+                   textcoords='offset fontsize',
+                   arrowprops=dict(arrowstyle="->", facecolor=arrow_color, color=arrow_color, lw=1.5),
+                   bbox=dict(boxstyle='round,pad=0.6',
+                            facecolor=text_color_bbox, edgecolor='#003D99', linewidth=2))
+    
+    # ── Función para dibujar causas ──
+    def draw_causes(data: list, cause_x: float, cause_y: float,
+                   cause_xytext=(-9, -0.3), top: bool = True):
+        """Dibuja las causas conectadas a una rama."""
+        coords = [[0.02, 0],
+                 [0.23, 0.5],
+                 [-0.46, -1],
+                 [0.69, 1.5],
+                 [-0.92, -2],
+                 [1.15, 2.5]]
+        
+        for index, causa_item in enumerate(data[:6]):
+            # Extraer texto de causa
+            if isinstance(causa_item, dict):
+                cause_text = causa_item.get("causa", "")
+            else:
+                cause_text = str(causa_item)
+            
+            if not cause_text:
+                continue
+            
+            # Ajustar posición
+            cause_x_adj = cause_x - coords[index][0]
+            cause_y_adj = cause_y + (coords[index][1] if top else -coords[index][1])
+            
+            # Dibujar causa
+            ax.annotate(cause_text, xy=(cause_x_adj, cause_y_adj),
+                       ha='center', va='center',
+                       xytext=cause_xytext,
+                       fontsize=8.5,
+                       xycoords='data',
+                       textcoords='offset fontsize',
+                       color=t["texto"],
+                       arrowprops=dict(arrowstyle="->", facecolor=arrow_color, color=arrow_color, lw=1))
+    
+    # ── Función para dibujar la espina dorsal ──
+    def draw_spine(xmin: int, xmax: int):
+        """Dibuja espina principal, cabeza (efecto) y cola."""
+        # Línea principal
+        ax.plot([xmin - 0.1, xmax], [0, 0], color=arrow_color, linewidth=2.5)
+        
+        # Cabeza (semicírculo) con problema - más grande para que quepa el texto
+        head_radius = 2.0
+        semicircle = Wedge((xmax, 0), head_radius, 270, 90, fc=text_color_bbox, 
+                          ec='#003D99', linewidth=2)
+        ax.add_patch(semicircle)
+        
+        # Texto del problema - centrado dentro del semicírculo
+        ax.text(xmax + head_radius * 0.4, 0, problema.upper()[:24], fontsize=12,
+               weight='bold', color='white', ha='center', va='center')
+        
+        # Cola (triángulo)
+        tail_pos = [[xmin - 0.8, 0.8], [xmin - 0.8, -0.8], [xmin, -0.01]]
+        triangle = Polygon(tail_pos, fc=text_color_bbox, ec='#003D99', linewidth=2)
+        ax.add_patch(triangle)
+    
+    # ── Obtener categorías y organizarlas ──
     categorias = ["Metodo", "Maquina", "Mano de obra", "Materiales", "Medicion", "Medio ambiente"]
-    colores = ["#6C5CE7", "#E17055", "#00B894", "#FDCB6E", "#00A8FF", "#0984E3"]
-
-    def _box_w(texto_in, base=120, char_w=7, pad=24):
-        return max(base, len(str(texto_in)) * char_w + pad)
-
-    max_causa_len = 0
-    max_sub_len = 0
-    max_cat_len = max(len(c) for c in categorias)
+    data_dict = {}
     for cat in categorias:
-        for item in causas_por_categoria.get(cat, []):
-            max_causa_len = max(max_causa_len, len(item.get("causa", "")))
-            for sub in item.get("subcausas", []):
-                max_sub_len = max(max_sub_len, len(sub))
-
-    max_causa_w = _box_w("X" * max_causa_len, base=130)
-    max_sub_w = _box_w("X" * max_sub_len, base=110, char_w=6, pad=22)
-    max_cat_w = _box_w("X" * max_cat_len, base=120)
-    efecto_w = _box_w(problema, base=130)
-
-    left_pad = max(0, (max_causa_w + max_sub_w) - 180 + 32)
-    right_pad = max(0, (width - 150 + efecto_w) - width)
-    view_min_x = -left_pad
-    view_width = width + left_pad + right_pad
-
-    cx = width - 140
-    cy = height / 2
-    pares = max(1, math.ceil(len(categorias) / 2))
-    spine_start = 180
-    spine_end = cx - 40
-    section_gap = (spine_end - spine_start) / (pares + 1)
-
-    top_y = 140
-    bottom_y = height - 140
-    attach_x = [spine_start + section_gap * (i + 1) for i in range(pares)]
-
-    offsets = [(0, 0), (22, 28), (-26, -40), (36, 56), (-48, -72), (60, 88)]
-
-    def rect(x, y, w, h, fill, stroke, text, text_color="#FFFFFF", title_text="", font_size=13):
-        title = _escape_xml(title_text) if title_text else ""
-        return (
-            f"<g>"
-            f"<title>{title}</title>"
-            f"<rect x='{x}' y='{y}' width='{w}' height='{h}' rx='6' ry='6' "
-            f"fill='{fill}' stroke='{stroke}' />"
-            f"<text x='{x + w/2}' y='{y + h/2 + 5}' text-anchor='middle' "
-            f"fill='{text_color}' font-size='{font_size}' font-family='sans-serif'>{text}</text>"
-            f"</g>"
-        )
-
-    svg = [
-        f"<svg width='100%' height='100%' viewBox='{view_min_x} 0 {view_width} {height}' preserveAspectRatio='xMidYMid meet' "
-        f"xmlns='http://www.w3.org/2000/svg' style='background:{fondo};display:block;'>",
-        f"<defs><marker id='arrow' markerWidth='10' markerHeight='10' refX='6' refY='3' orient='auto'>"
-        f"<path d='M0,0 L0,6 L6,3 z' fill='{linea}' /></marker></defs>",
-        f"<line x1='{spine_start}' y1='{cy}' x2='{spine_end}' y2='{cy}' stroke='{linea}' stroke-width='2' />",
-        f"<line x1='{spine_end}' y1='{cy}' x2='{cx - 10}' y2='{cy}' stroke='{linea}' stroke-width='2' marker-end='url(#arrow)' />",
-    ]
-
-    # Caja de efecto
-    efecto_texto = _escape_xml(problema)
-    svg.append(rect(cx - 10, cy - 26, efecto_w, 52, "#5B8FF9", "#2B5FB5", efecto_texto, title_text=problema))
-
-    # Categorias superiores
-    for idx, cat in enumerate(categorias[:3]):
-        ax = attach_x[min(idx, len(attach_x) - 1)]
-        svg.append(f"<line x1='{ax}' y1='{cy}' x2='{ax - 120}' y2='{top_y}' stroke='{linea}' stroke-width='2' />")
-        cat_text = _escape_xml(cat)
-        cat_w = _box_w(cat, base=120)
-        svg.append(rect(ax - 210, top_y - 18, cat_w, 36, colores[idx], "#444", cat_text, title_text=cat))
-
         causas = causas_por_categoria.get(cat, [])
-        n = min(6, len(causas))
-        for cidx, causa_item in enumerate(causas[:6], start=1):
-            t = cidx / (n + 1)
-            px = ax - 120 * t
-            py = cy - (cy - top_y) * t
-            causa = causa_item["causa"]
-            causa_text = _escape_xml(causa)
-            box_w = _box_w(causa, base=130)
-            dx, dy = offsets[min(cidx - 1, len(offsets) - 1)]
-            box_center_x = px - 120 - dx
-            box_center_y = py - dy
-            box_x = box_center_x - (box_w / 2)
-            box_h = 26
-            box_y = box_center_y - (box_h / 2)
-            svg.append(rect(box_x, box_y, box_w, box_h, "#E8E8FF", "#B6A7FF", causa_text, text_color="#222222", title_text=causa))
-            svg.append(
-                f"<line x1='{box_x + box_w}' y1='{box_y + (box_h / 2)}' x2='{px}' y2='{py}' "
-                f"stroke='{linea}' stroke-width='1.5' marker-end='url(#arrow)' />"
-            )
-
-    # Categorias inferiores
-    for idx, cat in enumerate(categorias[3:], start=3):
-        ax = attach_x[min(idx - 3, len(attach_x) - 1)]
-        svg.append(f"<line x1='{ax}' y1='{cy}' x2='{ax - 120}' y2='{bottom_y}' stroke='{linea}' stroke-width='2' />")
-        cat_text = _escape_xml(cat)
-        cat_w = _box_w(cat, base=120)
-        svg.append(rect(ax - 210, bottom_y - 18, cat_w, 36, colores[idx], "#444", cat_text, title_text=cat))
-
-        causas = causas_por_categoria.get(cat, [])
-        n = min(6, len(causas))
-        for cidx, causa_item in enumerate(causas[:6], start=1):
-            t = cidx / (n + 1)
-            px = ax - 120 * t
-            py = cy + (bottom_y - cy) * t
-            causa = causa_item["causa"]
-            causa_text = _escape_xml(causa)
-            box_w = _box_w(causa, base=130)
-            dx, dy = offsets[min(cidx - 1, len(offsets) - 1)]
-            box_center_x = px - 120 - dx
-            box_center_y = py + dy
-            box_x = box_center_x - (box_w / 2)
-            box_h = 26
-            box_y = box_center_y - (box_h / 2)
-            svg.append(rect(box_x, box_y, box_w, box_h, "#E8E8FF", "#B6A7FF", causa_text, text_color="#222222", title_text=causa))
-            svg.append(
-                f"<line x1='{box_x + box_w}' y1='{box_y + (box_h / 2)}' x2='{px}' y2='{py}' "
-                f"stroke='{linea}' stroke-width='1.5' marker-end='url(#arrow)' />"
-            )
-
-    svg.append("</svg>")
-    html = """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>
-        html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; }}
-        .wrap {{ width: 100%; height: 100%; }}
-    </style>
-</head>
-<body>
-    <div class="wrap">{}</div>
-</body>
-</html>""".format("".join(svg))
-    data_url = "data:text/html;charset=utf-8," + urllib.parse.quote(html)
-    st.iframe(data_url, height=height)
+        data_dict[cat] = causas
+    
+    # ── Dibujar ──
+    length = (math.ceil(len(data_dict) / 2)) - 1
+    draw_spine(-2 - length, 2 + length)
+    
+    # Cambiar coordenadas de las anotaciones de problemas después de renderizar cada una
+    offset = 0
+    prob_section = [1.55, 0.8]
+    
+    for index, (cat_name, causas) in enumerate(data_dict.items()):
+        plot_above = index % 2 == 0
+        cause_arrow_y = 1.7 if plot_above else -1.7
+        y_prob_angle = 16 if plot_above else -16
+        
+        # Calcular posiciones
+        prob_arrow_x = prob_section[0] + length + offset
+        cause_arrow_x = prob_section[1] + length + offset
+        
+        if not plot_above:
+            offset -= 2.5
+        
+        if index > 5:
+            raise ValueError(f'Maximum number of problems is 6, you have entered {len(data_dict)}')
+        
+        # Dibujar categoría
+        draw_problem(cat_name, prob_arrow_x, 0, -12, y_prob_angle)
+        
+        # Dibujar causas
+        draw_causes(causas, cause_arrow_x, cause_arrow_y, top=plot_above)
+    
+    # Mostrar en Streamlit
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
 
 
 def _df_para_tabla(df):
@@ -712,7 +699,7 @@ if archivo_subido is not None:
     # ══════════════════════════════════════════
     with tab1:
         st.subheader("1. Vista previa de los datos")
-        st.dataframe(_df_para_tabla(df.head()), width="stretch")
+        st.dataframe(_df_para_tabla(df.head()), use_container_width=True)
         st.divider()
 
         st.subheader("2. Configura la homologación")
@@ -778,7 +765,7 @@ if archivo_subido is not None:
             else:
                 df_final = st.session_state.df
 
-            st.dataframe(_df_para_tabla(df_final), width="stretch")
+            st.dataframe(_df_para_tabla(df_final), use_container_width=True)
             st.caption(f"Mostrando {len(df_final)} filas de un total de {len(st.session_state.df)}.")
 
             csv = df_final.to_csv(index=False).encode('utf-8')
@@ -1017,7 +1004,7 @@ if archivo_subido is not None:
                     )
                     render_echarts(option=option, height=520, key_prefix="echart_histogram")
                     with st.expander("Ver tabla de frecuencias"):
-                        st.dataframe(_df_para_tabla(pd.DataFrame({"Rango": categorias, "Frecuencia": valores})), width="stretch")
+                        st.dataframe(_df_para_tabla(pd.DataFrame({"Rango": categorias, "Frecuencia": valores})), use_container_width=True)
 
             elif tipo_grafico == "Dispersión":
                 if not scatter_x or not scatter_y:
@@ -1055,7 +1042,7 @@ if archivo_subido is not None:
                     )
                     render_echarts(option=option, height=520, key_prefix="echart_scatter")
                     with st.expander("Ver tabla de puntos"):
-                        st.dataframe(_df_para_tabla(datos), width="stretch")
+                        st.dataframe(_df_para_tabla(datos), use_container_width=True)
 
             else:
                 df_vis = df_plot.copy()
@@ -1081,17 +1068,18 @@ if archivo_subido is not None:
                     df_vis[col_columnas_sec_eff] = serie
 
                 campos_filas = [col_filas_eff]
-                if col_filas_sec_eff != NINGUNO:
-                    campos_filas.append(col_filas_sec_eff)
 
                 campos_columnas = []
                 if col_columnas_eff != NINGUNO:
                     campos_columnas.append(col_columnas_eff)
+                # Si hay fila secundaria, la usamos como serie para crear barras apiladas
+                if col_filas_sec_eff != NINGUNO:
+                    campos_columnas.append(col_filas_sec_eff)
                 if col_columnas_sec_eff != NINGUNO:
                     campos_columnas.append(col_columnas_sec_eff)
 
-                hay_tiempo_filas = fila_es_tiempo or fila_sec_es_tiempo
-                hay_tiempo_columnas = col_es_tiempo or col_sec_es_tiempo
+                hay_tiempo_filas = fila_es_tiempo
+                hay_tiempo_columnas = col_es_tiempo or fila_sec_es_tiempo or col_sec_es_tiempo
 
                 for campo in campos_filas + campos_columnas:
                     df_vis[campo] = df_vis[campo].fillna("Sin dato").astype(str)
@@ -1124,7 +1112,7 @@ if archivo_subido is not None:
                             nombre_dim = " + ".join(campos_filas)
                             st.dataframe(
                                 _df_para_tabla(pd.DataFrame({nombre_dim: categorias, "Conteo": valores, "Acumulado (%)": porcentaje})),
-                                width="stretch"
+                                use_container_width=True
                             )
 
                 elif metrica != "Conteo" and not col_valor:
@@ -1218,7 +1206,7 @@ if archivo_subido is not None:
                             nombre_dim = " + ".join(campos_filas)
                             st.dataframe(
                                 _df_para_tabla(pd.DataFrame({nombre_dim: categorias, metrica: valores})),
-                                width="stretch"
+                                use_container_width=True
                             )
 
                     else:
@@ -1262,7 +1250,7 @@ if archivo_subido is not None:
                         )
                         render_echarts(option=option, height=520, key_prefix="echart_multi")
                         with st.expander("Ver tabla de datos cruzados"):
-                            st.dataframe(_df_para_tabla(tabla_top), width="stretch")
+                            st.dataframe(_df_para_tabla(tabla_top), use_container_width=True)
 
     # ══════════════════════════════════════════
     # PESTAÑA 3: ISHIKAWA
